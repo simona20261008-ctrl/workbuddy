@@ -543,6 +543,7 @@ def run(dry_run=False, location_id=None):
         refresh_code, refresh_body = refresh_token(rt)
     print("[info] 刷新接口 http=%s code=%s" %
           (refresh_code, refresh_body.get("code") if isinstance(refresh_body, dict) else "?"))
+    renew = {"enabled": False, "detail": "刷新未成功，跳过自续期"}
     if not isinstance(refresh_body, dict) or refresh_body.get("code") != 0:
         rb = refresh_body.get("msg") if isinstance(refresh_body, dict) else str(refresh_body)
         checkin = {"status": "error", "msg": "长效令牌刷新失败：%s（请重新运行 refresh_token_local.py 注入最新令牌）" % rb}

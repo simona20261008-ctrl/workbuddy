@@ -48,19 +48,35 @@ refresh_token_local.py  ──▶   Secrets: WB_REFRESH_TOKEN
 （可选）开启「签名校验」拿到加签密钥。
 
 ### 2. 注入密钥到仓库 Secret
-在你的电脑上（WorkBuddy 客户端已登录运行）执行：
+
+**方式 A（推荐，一条命令全搞定）** —— 在你的电脑上（WorkBuddy 客户端已登录运行）执行，
+脚本会把 `WB_REFRESH_TOKEN` **以及**飞书两条凭据一次性注入仓库 Secret：
 
 ```bash
-# 自动注入 WB_REFRESH_TOKEN（优先 gh CLI；其次 GH_TOKEN 走 API）
 python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
     --feishu-webhook "https://open.feishu.cn/open-apis/bot/v2/hook/xxxx" \
-    --feishu-secret "你的加签密钥（可选）"
+    --feishu-secret "你的加签密钥（没开签名校验可省略此参数）"
 ```
 
 - 脚本复用已安装的 `totorosir-workbuddy-checkin` 技能导出长效令牌，自动处理 5.6.2+ 加密登录态。
 - 明文令牌只经 `gh secret set -b` / HTTPS 直传，**不写文件、不进日志**；终端只打印脱敏串。
-- 没装 `gh` 也没 `GH_TOKEN` 时，脚本会给出手动命令，你复制令牌到 GitHub 仓库
-  Settings → Secrets → Actions 里新建 `WB_REFRESH_TOKEN` / `WB_FEISHU_WEBHOOK` / `WB_FEISHU_SECRET` 即可。
+- 飞书两条凭据**用方式 A 已自动写入**，无需再到 UI 手动加；只有下面的情况才走方式 B。
+
+**方式 B（手动在 GitHub UI 加，截图级）** —— 适用于：没装 `gh`/`GH_TOKEN`、或只想单独补某条 Secret。
+
+1. 打开仓库首页 → 点顶部导航栏的 **Settings**（仓库级 Settings，不是个人头像里的 Settings）。
+2. 左侧边栏最底部点 **Secrets and variables** → 展开后点 **Actions**。
+3. 进入 *Actions secrets* 页，点右上角绿色按钮 **New repository secret**。
+4. **Name** 填 `WB_FEISHU_WEBHOOK`；**Secret** 文本框粘贴飞书机器人完整 Webhook
+   （形如 `https://open.feishu.cn/open-apis/bot/v2/hook/xxxx`）→ 点 **Add secret**。
+5. 重复第 3–4 步，新增 `WB_FEISHU_SECRET`（值为开启「签名校验」时拿到的加签密钥；
+   **没开签名校验则不用加这条**）。
+6. （若没用方式 A）同样新增 `WB_REFRESH_TOKEN`，值来自本机 `python3 scripts/refresh_token_local.py --check`
+   打印的明文——**仅此一次需要本机在线**。
+7. 保存后列表应出现对应条目且有 *Last updated* 日期。GitHub 会自动在日志掩码 Secret，无需手动处理。
+
+> 无论方式 A/B，三条 Secret 为：`WB_REFRESH_TOKEN`（必填）、`WB_FEISHU_WEBHOOK`（必填）、
+> `WB_FEISHU_SECRET`（可选，取决于飞书是否开签名校验）。
 
 ### 3. 推送本仓库到 GitHub
 ```bash
@@ -71,18 +87,31 @@ git push -u origin main
 
 ### 4.（可选）云端自续期 —— 实现「本机永久关机也能跑」
 长效令牌本身只有 ~30 天有效期。默认模式下需每 ~30 天开一次本机重注入；
-启用自续期后，云端每次刷新会把新 refreshToken 写回 Secret，从此本机只需最初注入一次。
+启用自续期后，云端每次刷新把新 refreshToken 写回 Secret，从此本机只需最初注入一次。
+唯一仍需偶尔操作的，是 `WB_GH_PAT` 这个令牌本身约 1 年到期（到期前在**任意浏览器**续期一次即可，**不依赖本机客户端**）。
 
-做法：新建一个**细粒度 PAT**（Fine-grained PAT），仅授予本仓库的
-「Actions › Read and write」权限（不要给整账号 `repo` 全权），把它作为
-`WB_GH_PAT` Secret 加到仓库。Workflow 检测到该 Secret 后自动安装 PyNaCl 并写回。
+**新建细粒度 PAT（截图级点击路径）：**
 
-```bash
-# 在 GitHub 仓库 Settings → Secrets → Actions 新建：
-#   WB_GH_PAT = 上面拿到的细粒度 PAT
-```
-> 安全说明：`WB_GH_PAT` 具备写本仓库 Actions Secret 的能力，务必用「仅限本仓库」的
-> 细粒度令牌，不要用有 `repo` 全权的经典 PAT。它也只存在于 GitHub Secret，不进本仓库/日志。
+1. 点 GitHub 右上角头像 → **Settings**。
+2. 左侧边栏底部点 **Developer settings**。
+3. 点 **Personal access tokens** → **Fine-grained tokens**。
+4. 点绿色按钮 **Generate new token**。
+5. **Token name** 填 `workbuddy-checkin-renew`（便于识别）。
+6. **Expiration** 选最长（细粒度最多 1 年）；到期前续期一次即可。
+7. **Resource owner** 选你自己的账号（或拥有该仓库的 org；选 org 可能需管理员审批）。
+8. **Repository access** 选 **Only select repositories** → 在下拉里勾选你的签到仓库（如 `workbuddy-actions-checkin`）。
+9. 展开 **Repository permissions** → 找到 **Secrets (repo)** → 权限选 **Read and write**
+   （写 Actions Secret 靠这条；**不是** Administration，也不是 Actions）。Metadata 会自动勾选，不用管。
+10. 页面底部点 **Generate token**。
+11. 生成的令牌以 `github_pat_` 开头，**只显示一次**，立即复制。
+12. 回到仓库 **Settings → Secrets and variables → Actions → New repository secret**，
+    **Name** 填 `WB_GH_PAT`，**Secret** 粘贴该令牌 → **Add secret**。
+
+Workflow 检测到 `WB_GH_PAT` 后会自动 `pip install pynacl` 并把新 refreshToken 写回 `WB_REFRESH_TOKEN`。
+
+> 安全说明：`WB_GH_PAT` 具备写本仓库 Actions Secret 的能力，务必用「仅限本仓库」的细粒度令牌
+> （第 8 步选 Only select repositories），不要用有整账号 `repo` 全权的经典 PAT。
+> 它也只存在于 GitHub Secret，不进本仓库/日志。
 
 ## 验证 / 跑通一次
 
