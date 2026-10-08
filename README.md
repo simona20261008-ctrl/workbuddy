@@ -178,6 +178,15 @@ python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
    | **Secrets** | 写仓库 Actions Secret | 后面自续期无法写回（可选但建议一次配齐） |
 
    `Metadata` 会自动变 Read-only，不用管。Account 分组不用加。
+
+> **清掉无关权限**：`+ Add permissions` 下拉里选项极多，很容易点错。若权限列表里出现
+> `Repository creation`、`Repository security advisories`、`GitHub App installation repository access`
+> 之类的行，点每行右侧的 **✕** 删掉。最终只该剩 **4 条**：
+> `Metadata`(Required) + `Contents` + `Workflows` + `Secrets` —— 加完后 `Repositories` 标签上的计数应显示 **4**。
+>
+> 别被名字坑：细粒度页里没有 `workflow scope` 这个说法，推 workflow 文件靠的就是权限行 **`Workflows`**
+> （描述为 "Add and update GitHub Action workflows"）。它**只能**在这里授予，`permissions:` YAML 里写不了。
+> 漏了它的报错是 `refusing to allow a ... to create or update workflow ... without 'workflows' permission`。
 6. 拉到底点 **Generate token** → 顶部出现 `github_pat_` 开头的串，**只显示一次**，立即复制。
 
 **B. 经典页**
