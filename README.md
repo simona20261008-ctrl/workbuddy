@@ -143,19 +143,91 @@ python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
 > 无论方式 A/B，三条 Secret 为：`WB_REFRESH_TOKEN`（必填）、`WB_FEISHU_WEBHOOK`（必填）、
 > `WB_FEISHU_SECRET`（可选，取决于飞书是否开签名校验）。
 
-### 3. 推送本仓库到 GitHub
-```bash
-git init && git add -A && git commit -m "add workbuddy checkin actions"
-git remote add origin git@github.com:<owner>/<仓库名>.git
-git push -u origin main
+### 3. 创建 PAT 并推送本仓库到 GitHub
+
+**3.1 先确认远端仓库已存在且为空**
+
+1. 打开 https://github.com/new
+2. **Repository name** 填 `workbuddy`（必须与本地 remote 一致）
+3. **不要**勾 Add a README file / Add .gitignore / Choose a license
+   —— 保持空仓库，否则首次 push 会报 `! [rejected] ... (fetch first)`
+4. 点 **Create repository**
+
+**3.2 创建推送用 PAT（先分辨你在哪个页面）**
+
+看浏览器地址栏：
+- `github.com/settings/personal-access-tokens/new` → **细粒度页**，`Repository access` 有**三个**选项（含 `Only select repositories`）
+- `github.com/settings/tokens/new` → **经典页**，`Repository access` 只有 `Public repositories` / `All repositories` 两个
+
+> 若你看到只有两个选项，说明这是经典令牌页。经典令牌**无法限定到单个仓库**（只能 All repositories），
+> 安全性弱于细粒度。想锁定单仓库请直接用细粒度页地址：https://github.com/settings/personal-access-tokens/new
+
+**A. 细粒度页（推荐）**
+
+1. **Token name** 填 `workbuddy-push`
+2. **Expiration** 选 90 天或最长 1 年
+3. **Repository access** → 选 **Only select repositories** → 下拉里勾选 **workbuddy**
+   （若下拉为空/没有这一项，先回 3.1 把仓库建出来）
+4. **Permissions** 区点右侧 **+ Add permissions** → 在弹出的分组里选 **Repository**
+5. 勾选下面三行，每行右侧 Access 都设成 **Read and write**：
+
+   | 权限 | 作用 | 不勾的后果 |
+   |---|---|---|
+   | **Contents** | 推送提交 | push 直接 403 |
+   | **Workflows** | 推送 `.github/workflows/*` | **push 被拒**（本仓库含 `daily-checkin.yml`） |
+   | **Secrets** | 写仓库 Actions Secret | 后面自续期无法写回（可选但建议一次配齐） |
+
+   `Metadata` 会自动变 Read-only，不用管。Account 分组不用加。
+6. 拉到底点 **Generate token** → 顶部出现 `github_pat_` 开头的串，**只显示一次**，立即复制。
+
+**B. 经典页**
+
+1. **Repository access** → **All repositories**（经典令牌无法限定单仓库）
+2. **Permissions** → **+ Add permissions** → **Repository** → 同样勾 **Contents / Workflows / Secrets** 全部 **Read and write**
+3. **Generate token** → 复制 `ghp_` 开头的串
+
+**3.3 推送**
+
+```cmd
+cd /d C:\Users\simona\WorkBuddy\2026-09-29-16-30-33\workbuddy-actions-checkin
+git -c credential.helper= push -u origin main
 ```
+
+- **必须先 cd 进仓库目录再执行**。在 `C:\Users\simona>` 主目录下执行会把整个用户主目录当仓库
+  （会把 `.workbuddy` 运行时缓存塞进索引，报 `adding files failed`）——这是上次报错的真实原因。
+- 提示 `Username for 'https://github.com':` → 输入 `simona`
+- 提示 `Password for 'https://simona@github.com':` → **粘贴 PAT**（屏幕不回显，正常）
+- 成功标志：`branch 'main' set up to track 'origin/main'.`
+
+验证：
+```cmd
+git ls-remote origin --heads
+```
+出现 `refs/heads/main` + SHA 即成功。
+
+可选——推送前先验一下这个 PAT 到底能不能看到该仓库（200 = 正常，401 = 令牌错，404 = 没勾选这个仓库）：
+```cmd
+curl -s -o NUL -w "%{http_code}\n" -H "Authorization: Bearer <粘贴你的PAT>" https://api.github.com/repos/simona/workbuddy
+```
+
+**3.4 常见拒绝与处置**
+
+| 报错 | 原因 | 处置 |
+|---|---|---|
+| `refusing to allow a Personal Access Token to create or update workflow ...` | PAT 缺 Workflows 权限 | 回 3.2 补 **Workflows: Read and write**，重新生成令牌再 push |
+| `! [rejected] main -> main (fetch first)` | 远端非空（建仓时勾了 README） | `git pull --rebase origin main` 后重试；**不要加 `--force`** |
+| `Authentication failed` | PAT 复制不全 / 已过期 | 重新生成 |
+| `remote: Write access to repository not granted` | PAT 未勾选该仓库 | 回 3.2 第 3 步把 `workbuddy` 勾上 |
 
 ### 4.（可选）云端自续期 —— 实现「本机永久关机也能跑」
 长效令牌本身只有 ~30 天有效期。默认模式下需每 ~30 天开一次本机重注入；
 启用自续期后，云端每次刷新把新 refreshToken 写回 Secret，从此本机只需最初注入一次。
 唯一仍需偶尔操作的，是 `WB_GH_PAT` 这个令牌本身约 1 年到期（到期前在**任意浏览器**续期一次即可，**不依赖本机客户端**）。
 
-**新建细粒度 PAT（截图级点击路径）：**
+**最省事的做法：直接复用 3.2 建的 PAT。** 只要 3.2 第 5 步勾了 **Secrets: Read and write**，
+把它原样填进 `WB_GH_PAT` 即可，不用再建第二个令牌。
+
+若要单独建（截图级点击路径）：
 
 1. 点 GitHub 右上角头像 → **Settings**。
 2. 左侧边栏底部点 **Developer settings**。
@@ -164,9 +236,11 @@ git push -u origin main
 5. **Token name** 填 `workbuddy-checkin-renew`（便于识别）。
 6. **Expiration** 选最长（细粒度最多 1 年）；到期前续期一次即可。
 7. **Resource owner** 选你自己的账号（或拥有该仓库的 org；选 org 可能需管理员审批）。
-8. **Repository access** 选 **Only select repositories** → 在下拉里勾选你的签到仓库（如 `workbuddy-actions-checkin`）。
-9. 展开 **Repository permissions** → 找到 **Secrets (repo)** → 权限选 **Read and write**
-   （写 Actions Secret 靠这条；**不是** Administration，也不是 Actions）。Metadata 会自动勾选，不用管。
+8. **Repository access** 选 **Only select repositories** → 在下拉里勾选 **workbuddy**
+   （若只有 Public/All 两个选项，说明进的是经典令牌页，改用 https://github.com/settings/personal-access-tokens/new）。
+9. **Permissions** → 点 **+ Add permissions** → 选 **Repository** 分组 →
+   找到 **Secrets** → Access 设 **Read and write**。
+   —— 写 Actions Secret 靠这条；**不是** Administration，也不是 Actions。`Metadata` 会自动勾选，不用管。
 10. 页面底部点 **Generate token**。
 11. 生成的令牌以 `github_pat_` 开头，**只显示一次**，立即复制。
 12. 回到仓库 **Settings → Secrets and variables → Actions → New repository secret**，
