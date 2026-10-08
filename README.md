@@ -171,6 +171,12 @@ python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
 2. **Expiration** 选 90 天或最长 1 年
 3. **Repository access** → 选 **Only select repositories** → 下拉里勾选 **workbuddy**
    （若下拉为空/没有这一项，先回 3.1 把仓库建出来）
+
+   > ⚠️ **顺序陷阱（务必看清）**：细粒度令牌的仓库范围是在**点 Generate token 那一刻定死的**。
+   > 先建令牌、后建仓库 → 下拉里当时根本选不到 `workbuddy` → 令牌**永远**访问不到它，
+   > push 会报 `remote: Repository not found`，且报错完全不提"令牌范围"这回事，极难自己想到。
+   > **正确顺序：先建空仓库（3.1）→ 再建令牌**。已经建反了也不用重来——生成后随时可以回去
+   > **Edit** 该令牌，把仓库补进 `Only select repositories` 即可，**立即生效、无需重新生成**。
 4. **Permissions** 区点右侧 **+ Add permissions** → 在弹出的分组里选 **Repository**
 5. 勾选下面三行，每行右侧 Access 都设成 **Read and write**：
 
@@ -244,6 +250,105 @@ try {
 > 不写任何系统设置、不改全局信任库。之所以需要它，是因为本机根证书库缺 Sectigo 根；
 > 我们已用 `openssl s_client` 抓链确认 GitHub 证书链真实（`Sectigo DV E36 ← Sectigo Root E46 ← USERTrust ECC`），
 > 无中间人替换，这才敢临时关校验。
+
+**3.2.2 用户名对了，仍报 `Repository not found` —— 一次体检定位**
+
+现象（注意 `remote:` 前缀）：
+
+```
+Password for 'https://<你的登录名>@github.com':        ← 能弹到这里 = TLS + 用户名都已通过
+remote: Repository not found.
+fatal: repository 'https://github.com/<owner>/workbuddy.git/' not found
+```
+
+**先读懂边界**：`remote:` 前缀说明这是 **GitHub 服务端**返回的；能弹到 Password 且**没报**
+`Invalid username or token`，说明**认证环节已通过**，失败在"找仓库"这一步。
+
+> GitHub 对**仓库不存在**与**你无权访问该仓库**故意返回**同一个 404**（防止探测私有仓库是否存在），
+> 所以这条错只有四种成因，必须靠体检结果区分，靠猜会绕很久。
+
+**体检脚本（PowerShell，一次性给出答案，且会顺手把本机 remote/用户名对齐）**
+
+```powershell
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
+$t = (Read-Host "粘贴 PAT（不回显，粘完回车）").Trim()
+$h = @{ Authorization = "Bearer $t"; "User-Agent" = "wb-checkin" }
+
+$me = $null
+try { $me = Invoke-RestMethod -Headers $h -Uri "https://api.github.com/user" } catch { }
+
+if (-not $me) {
+    Write-Host "[X] 令牌不可用（401 / 复制不全 / 已过期）-> 回 3.2 重新生成 PAT"
+} else {
+    $u = $me.login
+    Write-Host ("[1] 令牌对应的真实登录名 = " + $u)
+
+    $repos = @(Invoke-RestMethod -Headers $h -Uri "https://api.github.com/user/repos?per_page=100&affiliation=owner")
+    Write-Host ("[2] 该令牌可见仓库数 = " + $repos.Count)
+    $repos | ForEach-Object { Write-Host ("      - " + $_.full_name + "   private=" + $_.private) }
+
+    if (($repos | Where-Object { $_.full_name -eq ($u + "/workbuddy") }).Count -gt 0) {
+        Write-Host ("[3] OK：仓库 " + $u + "/workbuddy 存在且令牌可访问")
+        Set-Location "C:\Users\simona\WorkBuddy\2026-09-29-16-30-33\workbuddy-actions-checkin"
+        git config credential.username $u
+        git remote set-url origin ("https://github.com/" + $u + "/workbuddy.git")
+        git remote -v
+        Write-Host "    -> 接着执行： git push -u origin main   （Password 处粘贴 PAT）"
+    } else {
+        Write-Host ("[3] 令牌看不到 " + $u + "/workbuddy -> 按下面 A / C 处置")
+    }
+}
+Remove-Variable t, h, me, repos
+```
+
+读结果：
+
+| `[1]` | `[2]` 列表里有没有 workbuddy | 判定 | 处置 |
+|---|---|---|---|
+| 打印出登录名 | **有** | 令牌与仓库都正常 | 直接执行 `git push -u origin main` |
+| 打印出登录名 | **没有**，但你**确信建过**仓库 | **C：令牌没覆盖该仓库**（最常见） | 见 **C** |
+| 打印出登录名 | **没有**，且你**没建过** | **A：仓库不存在** | 见 **A** |
+| 脚本报 `[X] 令牌不可用` | — | 令牌本身有问题 | 回 3.2 重新生成 |
+
+**A. 仓库不存在** → 打开 https://github.com/new，**Owner 选你自己**，Name 填 `workbuddy`，
+**不勾任何初始化文件**，点 Create。
+
+**B. 仓库建在了别的账号 / 别的名字下** → 打开该仓库网页，把地址栏 `github.com/` 后第一段（owner）
+和第二段（仓库名）抄下来，按实际值对齐本地：
+
+```powershell
+git config credential.username "<地址栏里的 owner>"
+git remote set-url origin "https://github.com/<地址栏里的 owner>/<地址栏里的仓库名>.git"
+git remote -v     # 两条 URL 必须都是上面这个
+```
+
+**C. 令牌覆盖不到该仓库（最隐蔽，本例高概率原因）**
+细粒度令牌的 `Repository access` 在生成那一刻定死。若**先建令牌、后建仓库**，
+当时下拉里选不到 `workbuddy`，令牌自然访问不到它——两边都没错，纯粹是顺序问题。
+
+处置（二选一）：
+
+1. **改令牌范围（推荐，不必换令牌）**：Settings → Developer settings → Personal access tokens →
+   Fine-grained tokens → 点开该令牌 → **Edit** → `Repository access` → `Only select repositories` →
+   下拉里**加上 `workbuddy`** → **Save**。改完**立即生效**，无需重新生成。
+2. **删掉重建**：回 3.2 重走一遍，这次先确认下拉里能选到 `workbuddy`。
+
+> 同类情形：令牌 `Repository access` 选了 **Public repositories**，而仓库是 **private** → 同样 404。
+> 把仓库改 Public，或把令牌改成 `Only select repositories` 并勾上它。
+
+**D. 连锁事实：git 里写死的用户名可能本身就是错的**
+
+本机 git 配置里是 `credential.username=simona20261008`。实测 GitHub：
+
+| 探测方式 | 结果 |
+|---|---|
+| `api.github.com/users/simona20261008` | **404 Not Found** |
+| `github.com/simona20261008`（网页） | **404 Page not found** |
+| `api.github.com/search/users?q=simona20261008` | 只命中相近账号 **`simona20261008-ctrl`** |
+
+即 **`simona20261008` 这个账号在 GitHub 上不存在**。用户名不存在时，GitHub 不一定回 401，
+也可能直接回 404 `Repository not found` —— 所以**绝不能靠肉眼记用户名**，
+一律以上面体检脚本 `[1]` 打印的 `login` 为准。
 
 **3.3 推送**
 
@@ -372,7 +477,7 @@ Remove-Variable t, u
 | `! [rejected] main -> main (fetch first)` | 远端非空（建仓时勾了 README） | `git pull --rebase origin main` 后重试；**不要加 `--force`** |
 | `Authentication failed` | PAT 复制不全 / 已过期 | 重新生成 |
 | `remote: Write access to repository not granted` | PAT 未勾选该仓库 | 回 3.2 第 3 步把 `workbuddy` 勾上 |
-| `remote: Repository not found` | 远端仓库还没建；仓库名/owner 拼错；或仓库建在了**别人的账号**下 | 回 3.1 在你自己账号下建仓；核对 `git remote -v` 的 owner 是否等于 3.2.1 查到的登录名 |
+| `remote: Repository not found` | ① 仓库还没建；② owner 拼错或建在**别人账号**下；③ **令牌的 `Repository access` 没覆盖该仓库**（先建令牌后建仓库的典型后果）；④ 用户名本身不存在 | 跑 **3.2.2** 体检脚本，按 A/B/C/D 处置；改令牌范围后**立即生效**，不用重新生成 |
 
 ### 4.（可选）云端自续期 —— 实现「本机永久关机也能跑」
 长效令牌本身只有 ~30 天有效期。默认模式下需每 ~30 天开一次本机重注入；
