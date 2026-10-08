@@ -147,11 +147,14 @@ python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
 
 **3.1 先确认远端仓库已存在且为空**
 
-1. 打开 https://github.com/new
-2. **Repository name** 填 `workbuddy`（必须与本地 remote 一致）
-3. **不要**勾 Add a README file / Add .gitignore / Choose a license
-   —— 保持空仓库，否则首次 push 会报 `! [rejected] ... (fetch first)`
-4. 点 **Create repository**
+1. 打开 https://github.com/new（**先登录你自己的 GitHub 账号**）。
+2. **Owner** 保持你自己——页面左上角那个下拉显示的应是你的**登录名**。
+   若显示的不是你的账号，先切换账号再建（建到别人名下你推不上去）。
+3. **Repository name** 填 `workbuddy`（必须与本地 remote 一致）。
+4. **不要**勾 Add a README file / Add .gitignore / Choose a license
+   —— 保持空仓库，否则首次 push 会报 `! [rejected] ... (fetch first)`。
+5. 点 **Create repository**。创建后地址栏应显示 `github.com/<你的登录名>/workbuddy`，
+   **把这个 `<你的登录名>` 记下来**，3.3 配 remote 要用它。
 
 **3.2 创建推送用 PAT（先分辨你在哪个页面）**
 
@@ -195,7 +198,73 @@ python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
 2. **Permissions** → **+ Add permissions** → **Repository** → 同样勾 **Contents / Workflows / Secrets** 全部 **Read and write**
 3. **Generate token** → 复制 `ghp_` 开头的串
 
+**3.2.1 先确定你的 GitHub 登录名（关键，别用 Windows 用户名）**
+
+**Windows 用户名 ≠ GitHub 用户名**，两者毫无关系，不能想当然。本机 Windows 账户叫 `simona`，
+而 GitHub 上的 `Simona` 是 **2010-07-28 注册、2015 年后便无更新、0 个公开仓库的休眠陌生人账号**——
+拿它当 owner/用户名，认证必然被拒：
+
+```
+remote: Invalid username or token. Password authentication is not supported for Git operations.
+fatal: Authentication failed for 'https://github.com/simona/workbuddy.git/'
+```
+
+用下面这段一次性查出**你真实的登录名**，同时验证令牌是否可用（PowerShell）：
+
+```powershell
+# 本机 Windows 根证书库缺 Sectigo 根（见 3.3.1），.NET 的 HTTPS 同样会失败，故先对本次会话关闭校验
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
+$t = Read-Host "粘贴 PAT（不回显）"
+$h = @{ Authorization = "Bearer $t"; "User-Agent" = "wb-checkin" }
+try {
+    $me = Invoke-RestMethod -Headers $h -Uri "https://api.github.com/user"
+    Write-Host ("你的 GitHub 登录名 = " + $me.login)
+    $u = $me.login
+    try {
+        $r = Invoke-RestMethod -Headers $h -Uri "https://api.github.com/repos/$u/workbuddy"
+        Write-Host ("仓库已存在：" + $r.full_name)
+    } catch {
+        Write-Host "仓库 $u/workbuddy 不存在或令牌无权访问 -> 去 https://github.com/new 建空仓库 workbuddy"
+    }
+} catch {
+    Write-Host ("令牌无效 / 已过期 / 复制不全：" + $_.Exception.Message)
+}
+```
+
+读结果：
+
+| 输出 | 含义 | 下一步 |
+|---|---|---|
+| `你的 GitHub 登录名 = xxx` | 令牌可用，`xxx` 就是你的真实登录名 | 记下 `xxx`，3.3 里替换所有 `<你的登录名>` |
+| `令牌无效 / 已过期 / 复制不全：... 401 ...` | **令牌**问题 | 回 3.2 重新生成，注意整串复制（`github_pat_` 或 `ghp_`） |
+| `仓库 xxx/workbuddy 不存在...` | 仓库没建，或建在了别人名下 | 回 3.1，在**你自己的账号**下建空仓库 |
+| `Bad credentials` | 同上，令牌或不匹配 | 同上 |
+
+> `ServerCertificateValidationCallback = {$true}` **只影响当前 PowerShell 窗口**，关掉即失效，
+> 不写任何系统设置、不改全局信任库。之所以需要它，是因为本机根证书库缺 Sectigo 根；
+> 我们已用 `openssl s_client` 抓链确认 GitHub 证书链真实（`Sectigo DV E36 ← Sectigo Root E46 ← USERTrust ECC`），
+> 无中间人替换，这才敢临时关校验。
+
 **3.3 推送**
+
+**第一步：让 remote 与用户名对准你自己的账号**（`<你的登录名>` 取 3.2.1 打印的 `login`）
+
+```powershell
+git config credential.username "<你的登录名>"      # 预填用户名，避免手打错
+git remote set-url origin "https://github.com/<你的登录名>/workbuddy.git"
+git remote -v                                      # 核对：两条 URL 都应是 https://github.com/<你的登录名>/workbuddy.git
+```
+
+> 已经知道自己的 GitHub 登录名？那就不用跑 3.2.1 的 API 脚本，直接把上面两条命令里的
+> `<你的登录名>` 换成它即可。
+>
+> 可选（纯署名，不影响能否推送）：让提交归属到你的账号——
+> ```powershell
+> git config user.name "<你的登录名>"
+> git config user.email "<你的登录名>@users.noreply.github.com"
+> ```
+
+**第二步：选对 shell 再推**
 
 > ⚠️ **先确认自己在哪个 shell 里**。提示符是 `PS C:\...>` 就是 **PowerShell**，是 `C:\...>` 才是 **cmd**。
 > 两者语法不通用：`cd /d` 是 **cmd 专有**，在 PowerShell 里会报
@@ -224,8 +293,10 @@ git push -u origin main
 - **必须先 cd 进仓库目录再执行**，且执行前用 `git rev-parse --show-toplevel` 自检。
   在 `C:\Users\simona>` 下执行会报 `fatal: not a git repository`；若该目录还残留 `.git`，
   更会把整个用户主目录当仓库（塞入 `.workbuddy` 运行时缓存，报 `adding files failed`）。
-- 提示 `Username for 'https://github.com':` → 输入 `simona`
-- 提示 `Password for 'https://simona@github.com':` → **粘贴 PAT**（屏幕不回显，正常）
+- 提示 `Username for 'https://github.com':` → 已由 `credential.username` 预填，**直接回车**。
+  （若仍需手输：填 3.2.1 查到的登录名，**绝对不要填 Windows 用户名 `simona`**）
+- 提示 `Password for 'https://<你的登录名>@github.com':` → **粘贴 PAT**（屏幕不回显，正常）
+  —— 这里要的是**令牌**（`github_pat_` / `ghp_` 开头），**不是你 GitHub 账号的登录密码**。
 - 成功标志：`branch 'main' set up to track 'origin/main'.`
 
 **3.3.1 本机 TLS 环境修复（已预置，无需操作）**
@@ -266,7 +337,7 @@ git ls-remote origin --heads
 
 可选——推送前先验一下这个 PAT 到底能不能看到该仓库（200 = 正常，401 = 令牌错，404 = 没勾选这个仓库）：
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer <粘贴你的PAT>" https://api.github.com/repos/simona/workbuddy
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer <粘贴你的PAT>" https://api.github.com/repos/<你的登录名>/workbuddy
 ```
 （PowerShell 里可用 `curl.exe` 以避免 `curl` 别名冲突；cmd 里把 `/dev/null` 换成 `NUL`。
 注意：本机 `curl` 也用 schannel，做这个探测需加 `--ssl-no-revoke` 或改用 `curl.exe --insecure`；
@@ -276,12 +347,15 @@ curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer <粘贴你的
 令牌**只存在于当前会话变量**、不落 PowerShell 历史（`Read-Host` 不回显），用完立刻把 remote 复原：
 
 ```powershell
+$u = "<你的登录名>"
 $t = Read-Host "粘贴 PAT"
-git remote set-url origin "https://simona:$t@github.com/simona/workbuddy.git"
+git remote set-url origin "https://$u`:$t@github.com/$u/workbuddy.git"   # `:` 反引号转义，否则 PS 会当成作用域
 git push -u origin main
-git remote set-url origin "https://github.com/simona/workbuddy.git"   # 立刻复原，避免令牌留在 .git/config
-Remove-Variable t
+git remote set-url origin "https://github.com/$u/workbuddy.git"          # 立刻复原，避免令牌留在 .git/config
+Remove-Variable t, u
 ```
+> 不要在双引号里漏掉 `` ` ``：PowerShell 会把 `$u:` 解析成"变量 u 的 scope"，
+> 写成 `"$u:$t@..."` 会得到空值并报奇怪的错。上例已处理。
 > 不要直接把 `https://user:token@...` 明文敲进命令行——PowerShell 会把明文存进
 > `ConsoleHost_history.txt`。上面这种写法不会。
 
@@ -289,6 +363,7 @@ Remove-Variable t
 
 | 报错 | 原因 | 处置 |
 |---|---|---|
+| `remote: Invalid username or token. Password authentication is not supported for Git operations.` | ① **用户名不是你的 GitHub 登录名**（最典型：填了 Windows 用户名 `simona`）；② 在 Password 处填了账号**密码**而非 PAT；③ PAT 复制不全 / 已过期 / 已被撤销 | 先跑 **3.2.1** 查出真实登录名并对齐 remote；确认粘贴的是 `github_pat_`/`ghp_` 令牌 |
 | `fatal: not a git repository (or any of the parent directories): .git` | 当前目录不是仓库（多半还在 `C:\Users\simona`） | `cd` 到仓库目录，用 `git rev-parse --show-toplevel` 自检后再 push |
 | `Set-Location : 找不到接受实际参数"/d"的位置形式参数` | 在 **PowerShell** 里用了 **cmd** 的 `cd /d` | 去掉 `/d`：`cd "完整路径"`；或先敲 `cmd` 切到 cmd |
 | `schannel: SEC_E_UNTRUSTED_ROOT (0x80090325)` | Windows 根证书库缺 Sectigo/USERTrust 根证书 | 见 3.3.1，仓库级 `git config http.sslBackend openssl` |
@@ -297,7 +372,7 @@ Remove-Variable t
 | `! [rejected] main -> main (fetch first)` | 远端非空（建仓时勾了 README） | `git pull --rebase origin main` 后重试；**不要加 `--force`** |
 | `Authentication failed` | PAT 复制不全 / 已过期 | 重新生成 |
 | `remote: Write access to repository not granted` | PAT 未勾选该仓库 | 回 3.2 第 3 步把 `workbuddy` 勾上 |
-| `remote: Repository not found` | 远端仓库还没建，或仓库名/owner 拼错 | 回 3.1 建仓；核对 remote：`git remote -v` |
+| `remote: Repository not found` | 远端仓库还没建；仓库名/owner 拼错；或仓库建在了**别人的账号**下 | 回 3.1 在你自己账号下建仓；核对 `git remote -v` 的 owner 是否等于 3.2.1 查到的登录名 |
 
 ### 4.（可选）云端自续期 —— 实现「本机永久关机也能跑」
 长效令牌本身只有 ~30 天有效期。默认模式下需每 ~30 天开一次本机重注入；
