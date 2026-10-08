@@ -205,15 +205,18 @@ python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
 ```powershell
 cd "C:\Users\simona\WorkBuddy\2026-09-29-16-30-33\workbuddy-actions-checkin"
 git rev-parse --show-toplevel          # 应回显 ...\workbuddy-actions-checkin，确认进对目录
-git -c "credential.helper=" push -u origin main
+git push -u origin main
 ```
 
 **cmd**（提示符 `C:\...>`，没有 `PS`）：
 ```cmd
 cd /d C:\Users\simona\WorkBuddy\2026-09-29-16-30-33\workbuddy-actions-checkin
 git rev-parse --show-toplevel
-git -c credential.helper= push -u origin main
+git push -u origin main
 ```
+
+> 仓库级配置已预置（见 3.3.1），所以命令里不需要再带 `-c http.sslBackend=...` / `-c credential.helper=`。
+> 若换到别的机器/别的仓库，把参数显式写回去即可：`git -c credential.helper= -c http.sslBackend=openssl push -u origin main`。
 
 > 想用 cmd 但当前在 PowerShell？先敲一个 `cmd` 回车切换，再执行上面的 cmd 版。
 > PowerShell 5.1 不支持 `&&` 串联，**一行一条**执行，别粘成一行。
@@ -225,6 +228,36 @@ git -c credential.helper= push -u origin main
 - 提示 `Password for 'https://simona@github.com':` → **粘贴 PAT**（屏幕不回显，正常）
 - 成功标志：`branch 'main' set up to track 'origin/main'.`
 
+**3.3.1 本机 TLS 环境修复（已预置，无需操作）**
+
+本机曾报 `fatal: unable to access 'https://github.com/...': schannel: SEC_E_UNTRUSTED_ROOT (0x80090325)`。
+根因**不在 GitHub、不在令牌、不在代理**，而是：
+
+- Windows **根证书库缺少 Sectigo / USERTrust 根证书**（`certutil -store Root` 共 377 条，
+  含 DigiCert 等，唯独无这张），schannel 无法为 GitHub 的
+  `github.com ← Sectigo DV E36 ← Sectigo Root E46 ← USERTrust ECC` 链找到信任锚，
+  于是握手阶段直接失败。根证书自动更新通道亦不可用，无法自愈。
+- 附带故障：PortableGit 的 `credential.helper=helper-selector` 同样走 schannel，
+  会额外抛 `未能为 SSL/TLS 安全通道建立信任关系`（中文 .NET 措辞），属**同源问题**。
+
+已在本仓库写入两条**仓库级**配置（不动全局，避免影响内网 Git 服务器）：
+
+```ini
+http.sslBackend = openssl      # 改用 git 自带的 Mozilla CA 包，绕开 Windows 根证书库
+credential.helper =            # 置空 = 禁用 helper-selector，改为终端直接输入账号密码
+```
+
+验证：`git ls-remote origin --heads` 的报错若从 `schannel: SEC_E_UNTRUSTED_ROOT`
+变成 `could not read Username ...`，即 **TLS 已通、只差凭据**。
+
+> 换新机器或新 clone 后又出现该错误，在新仓库里重跑一次即可：
+> ```bash
+> git config http.sslBackend openssl
+> git config credential.helper ""
+> ```
+> 若想让全局的 GitHub 仓库都生效（**注意**：会让内网自签 CA 的 Git 服务器验证失败，
+> 除非另配 `http.sslCAInfo`）：`git config --global http.sslBackend openssl`。
+
 验证：
 ```bash
 git ls-remote origin --heads
@@ -235,7 +268,9 @@ git ls-remote origin --heads
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer <粘贴你的PAT>" https://api.github.com/repos/simona/workbuddy
 ```
-（PowerShell 里可用 `curl.exe` 以避免 `curl` 别名冲突；cmd 里把 `/dev/null` 换成 `NUL`。）
+（PowerShell 里可用 `curl.exe` 以避免 `curl` 别名冲突；cmd 里把 `/dev/null` 换成 `NUL`。
+注意：本机 `curl` 也用 schannel，做这个探测需加 `--ssl-no-revoke` 或改用 `curl.exe --insecure`；
+更稳的做法是直接用 `git ls-remote` 验证。）
 
 **备选：交互式提示不出现时**（终端不弹账号密码，卡住或直接 403）。用一次性 URL 认证，
 令牌**只存在于当前会话变量**、不落 PowerShell 历史（`Read-Host` 不回显），用完立刻把 remote 复原：
@@ -256,10 +291,13 @@ Remove-Variable t
 |---|---|---|
 | `fatal: not a git repository (or any of the parent directories): .git` | 当前目录不是仓库（多半还在 `C:\Users\simona`） | `cd` 到仓库目录，用 `git rev-parse --show-toplevel` 自检后再 push |
 | `Set-Location : 找不到接受实际参数"/d"的位置形式参数` | 在 **PowerShell** 里用了 **cmd** 的 `cd /d` | 去掉 `/d`：`cd "完整路径"`；或先敲 `cmd` 切到 cmd |
+| `schannel: SEC_E_UNTRUSTED_ROOT (0x80090325)` | Windows 根证书库缺 Sectigo/USERTrust 根证书 | 见 3.3.1，仓库级 `git config http.sslBackend openssl` |
+| `未能为 SSL/TLS 安全通道建立信任关系` | 同上的根证书问题，但由 `helper-selector` 抛出 | 见 3.3.1，`git config credential.helper ""` |
 | `refusing to allow a Personal Access Token to create or update workflow ...` | PAT 缺 Workflows 权限 | 回 3.2 补 **Workflows: Read and write**，重新生成令牌再 push |
 | `! [rejected] main -> main (fetch first)` | 远端非空（建仓时勾了 README） | `git pull --rebase origin main` 后重试；**不要加 `--force`** |
 | `Authentication failed` | PAT 复制不全 / 已过期 | 重新生成 |
 | `remote: Write access to repository not granted` | PAT 未勾选该仓库 | 回 3.2 第 3 步把 `workbuddy` 勾上 |
+| `remote: Repository not found` | 远端仓库还没建，或仓库名/owner 拼错 | 回 3.1 建仓；核对 remote：`git remote -v` |
 
 ### 4.（可选）云端自续期 —— 实现「本机永久关机也能跑」
 长效令牌本身只有 ~30 天有效期。默认模式下需每 ~30 天开一次本机重注入；
