@@ -28,6 +28,71 @@ refresh_token_local.py  ──▶   Secrets: WB_REFRESH_TOKEN
 > **长效令牌有效期实测为 ~30 天**（`refreshExpiresIn: 2592000`）。
 > 不启用自续期 → 每 ~30 天需开一次本机重注入；启用自续期（见下）→ 本机只需最初注入一次。
 
+## 部署前准备清单（软件客户端与环境）
+
+本方案的**日常运行全在 GitHub 云端**，只有**最初那一次**需要本机开机：从已登录的 WorkBuddy 客户端登录态解密出长效令牌并注入仓库 Secret（令牌只能从已登录客户端得到，硬约束，代码绕不过）。明确这一点，就能理解「本机关机不影响云端定时运行」——前提是已经完成了那唯一一次本机令牌提取。
+
+### 本机需准备的软件 / 账号（一次性）
+
+| 软件 / 账号 | 在本方案中的角色 | 必装？ | 获取 / 验证 |
+|---|---|---|---|
+| **WorkBuddy 客户端**（你正在用的工具） | 已登录运行，供 `rt_auth.py` 读取本地登录态、解密出长效令牌——令牌的唯一来源 | 必装（你已有） | 保持登录、未退出即可 |
+| **totorosir-workbuddy-checkin 技能** | `refresh_token_local.py` 复用其中 `rt_auth.py` 读登录态 | 必装（你已装） | 已存在 `~/.workbuddy/skills/totorosir-workbuddy-checkin__skillhub/scripts/rt_auth.py` |
+| **Python 3.8+** | 运行本机导出/注入脚本 | 必装 | 见下方安装 |
+| **Git** | 初始化并推送仓库 | 必装 | 见下方安装 |
+| **GitHub CLI（gh）**（推荐） | 一条命令写入仓库 Secret，免去手动复制 | 强烈推荐 | 见下方安装 |
+| **GitHub 账号** | 存放仓库、承载 Actions | 必装 | 免费注册 github.com |
+| **飞书账号 + 群机器人** | 接收每日推送 | 必装 | 见下方「一次性配置 → 步骤 1」 |
+
+> 注意：云端 `run_checkin.py` 是**自包含**的——只读 Secret 令牌、直接打真实接口，不依赖 WorkBuddy 客户端、不依赖上面那个技能、也不需要本机有 PyNaCl（自续期用的 PyNaCl 由 workflow 自动 `pip install`）。所以「本机关机」只影响最初那一次令牌提取，不影响后续任何云端运行。
+
+### 各软件安装与验证（Windows）
+
+所有命令在 Git Bash / PowerShell / CMD 均可；路径用正斜杠。
+
+**(1) Python 3.8+**
+- 下载：python.org 或 Microsoft Store 搜「Python」；安装时务必勾选 **Add Python to PATH**。
+- 验证（装完重开终端）：
+  ```bash
+  python3 --version    # Windows 多为 python，下文同理
+  ```
+  本方案脚本已兼容 `python3` 与 `python`；若系统只有 `python`，下文命令把 `python3` 换成 `python`。
+
+**(2) Git for Windows**
+- 下载：git-scm.com → Download；安装向导 **Select Components** 勾选「Git from the command line...」。
+- 验证：`git --version`
+- 首次设置身份（推仓库需要）：
+  ```bash
+  git config --global user.name  "你的名字"
+  git config --global user.email "你的邮箱"
+  ```
+
+**(3) GitHub CLI（gh，推荐）**
+- 下载：cli.github.com 或 `winget install --id GitHub.cli`。
+- 登录（弹浏览器授权）：`gh auth login` → 选 GitHub.com → 浏览器授权 → 默认范围含 repo。
+- 验证：`gh auth status` 显示 `Logged in to github.com` 即就绪（注入 Secret 的 `gh secret set ... -R <repo>` 才能免密执行）。
+
+**(4) WorkBuddy 客户端 + 签到技能（确认而非安装）**
+- 客户端保持**已登录**（最近登录过、未退出）。
+- 确认技能脚本存在（导令牌要用）：
+  ```bash
+  ls "$HOME/.workbuddy/skills/totorosir-workbuddy-checkin__skillhub/scripts/rt_auth.py"
+  ```
+  存在即可；若技能目录改名，脚本会用 glob `*workbuddy-checkin*` 自动匹配。
+
+### 部署后可在纯浏览器完成的事项（不再依赖本机）
+
+| 操作 | 在哪里做 | 需本机开机？ |
+|---|---|---|
+| 推仓库（git push） | 本机 Git，或 GitHub 网页 Upload | 推仓库时需本机（也可网页上传） |
+| 设 `WB_REFRESH_TOKEN` / 飞书凭据 | `refresh_token_local.py`（本机）或 GitHub UI（浏览器） | 首次**提取令牌**需本机；之后无需 |
+| 设 `WB_GH_PAT`（自续期用） | 浏览器 GitHub 网页 | 否 |
+| 首次触发 / 看运行日志 | 浏览器 GitHub Actions 页 | 否 |
+| 每日定时运行 | GitHub 云端 runner | 否 |
+| `WB_GH_PAT` 续期（约 1 年一次） | 浏览器 GitHub 网页 | 否 |
+
+软件客户端就绪后，按下方「一次性配置」的步骤 1–4 完成飞书机器人、注入、推送与（可选）自续期即可。
+
 ## 接口（以实测为准，不用旧域名/旧路径）
 
 | 用途 | 方法 | 实际地址 |
