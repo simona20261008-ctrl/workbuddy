@@ -197,32 +197,65 @@ python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
 
 **3.3 推送**
 
+> ⚠️ **先确认自己在哪个 shell 里**。提示符是 `PS C:\...>` 就是 **PowerShell**，是 `C:\...>` 才是 **cmd**。
+> 两者语法不通用：`cd /d` 是 **cmd 专有**，在 PowerShell 里会报
+> `Set-Location : 找不到接受实际参数"/d"的位置形式参数`。
+
+**PowerShell**（提示符 `PS C:\...>`）：
+```powershell
+cd "C:\Users\simona\WorkBuddy\2026-09-29-16-30-33\workbuddy-actions-checkin"
+git rev-parse --show-toplevel          # 应回显 ...\workbuddy-actions-checkin，确认进对目录
+git -c "credential.helper=" push -u origin main
+```
+
+**cmd**（提示符 `C:\...>`，没有 `PS`）：
 ```cmd
 cd /d C:\Users\simona\WorkBuddy\2026-09-29-16-30-33\workbuddy-actions-checkin
+git rev-parse --show-toplevel
 git -c credential.helper= push -u origin main
 ```
 
-- **必须先 cd 进仓库目录再执行**。在 `C:\Users\simona>` 主目录下执行会把整个用户主目录当仓库
-  （会把 `.workbuddy` 运行时缓存塞进索引，报 `adding files failed`）——这是上次报错的真实原因。
+> 想用 cmd 但当前在 PowerShell？先敲一个 `cmd` 回车切换，再执行上面的 cmd 版。
+> PowerShell 5.1 不支持 `&&` 串联，**一行一条**执行，别粘成一行。
+
+- **必须先 cd 进仓库目录再执行**，且执行前用 `git rev-parse --show-toplevel` 自检。
+  在 `C:\Users\simona>` 下执行会报 `fatal: not a git repository`；若该目录还残留 `.git`，
+  更会把整个用户主目录当仓库（塞入 `.workbuddy` 运行时缓存，报 `adding files failed`）。
 - 提示 `Username for 'https://github.com':` → 输入 `simona`
 - 提示 `Password for 'https://simona@github.com':` → **粘贴 PAT**（屏幕不回显，正常）
 - 成功标志：`branch 'main' set up to track 'origin/main'.`
 
 验证：
-```cmd
+```bash
 git ls-remote origin --heads
 ```
 出现 `refs/heads/main` + SHA 即成功。
 
 可选——推送前先验一下这个 PAT 到底能不能看到该仓库（200 = 正常，401 = 令牌错，404 = 没勾选这个仓库）：
-```cmd
-curl -s -o NUL -w "%{http_code}\n" -H "Authorization: Bearer <粘贴你的PAT>" https://api.github.com/repos/simona/workbuddy
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer <粘贴你的PAT>" https://api.github.com/repos/simona/workbuddy
 ```
+（PowerShell 里可用 `curl.exe` 以避免 `curl` 别名冲突；cmd 里把 `/dev/null` 换成 `NUL`。）
+
+**备选：交互式提示不出现时**（终端不弹账号密码，卡住或直接 403）。用一次性 URL 认证，
+令牌**只存在于当前会话变量**、不落 PowerShell 历史（`Read-Host` 不回显），用完立刻把 remote 复原：
+
+```powershell
+$t = Read-Host "粘贴 PAT"
+git remote set-url origin "https://simona:$t@github.com/simona/workbuddy.git"
+git push -u origin main
+git remote set-url origin "https://github.com/simona/workbuddy.git"   # 立刻复原，避免令牌留在 .git/config
+Remove-Variable t
+```
+> 不要直接把 `https://user:token@...` 明文敲进命令行——PowerShell 会把明文存进
+> `ConsoleHost_history.txt`。上面这种写法不会。
 
 **3.4 常见拒绝与处置**
 
 | 报错 | 原因 | 处置 |
 |---|---|---|
+| `fatal: not a git repository (or any of the parent directories): .git` | 当前目录不是仓库（多半还在 `C:\Users\simona`） | `cd` 到仓库目录，用 `git rev-parse --show-toplevel` 自检后再 push |
+| `Set-Location : 找不到接受实际参数"/d"的位置形式参数` | 在 **PowerShell** 里用了 **cmd** 的 `cd /d` | 去掉 `/d`：`cd "完整路径"`；或先敲 `cmd` 切到 cmd |
 | `refusing to allow a Personal Access Token to create or update workflow ...` | PAT 缺 Workflows 权限 | 回 3.2 补 **Workflows: Read and write**，重新生成令牌再 push |
 | `! [rejected] main -> main (fetch first)` | 远端非空（建仓时勾了 README） | `git pull --rebase origin main` 后重试；**不要加 `--force`** |
 | `Authentication failed` | PAT 复制不全 / 已过期 | 重新生成 |
