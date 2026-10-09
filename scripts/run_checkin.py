@@ -690,7 +690,15 @@ def run(dry_run=False, location_id=None):
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
     # 结论：签到成功即整体成功（猫猫失败不影响退出码）
-    return (0 if checkin.get("status") == "ok" else 1), result
+    checkin_ok = checkin.get("status") == "ok"
+    # 通知兜底：若配置了飞书但推送失败，让 GitHub Actions 判定为失败，
+    # 触发 GitHub 自带的失败通知（邮件 / Web 通知），避免“签到成功但通知没送达”的静默丢失。
+    if feishu_webhook:
+        notify_ok = bool(push_result.get("ok"))
+    else:
+        notify_ok = True  # 未配置飞书：视为无需通知，不因此判定失败
+    exit_code = 0 if (checkin_ok and notify_ok) else 1
+    return exit_code, result
 
 
 # ----------------------------------------------------------------------------
@@ -754,8 +762,25 @@ def main():
             location_id = int(argv[i + 1])
         except (ValueError, IndexError):
             pass
-    code, _ = run(dry_run=dry_run, location_id=location_id)
-    return code
+    try:
+        code, _ = run(dry_run=dry_run, location_id=location_id)
+        return code
+    except Exception as e:
+        # 兜底：任何未预期崩溃都尽量发飞书告警，避免静默失败（无飞书则仅打印）
+        import traceback
+        tb = traceback.format_exc(limit=6)
+        wh = os.environ.get("WB_FEISHU_WEBHOOK", "").strip()
+        sec = os.environ.get("WB_FEISHU_SECRET", "").strip()
+        if wh:
+            msg = ("【❌ 运行异常 · 未预期崩溃】\n%s\n\n请查看 Actions 运行日志。\n"
+                   "常见原因：WB_REFRESH_TOKEN 失效需重注入、WB_GH_PAT 无效导致自续期异常、"
+                   "或云端依赖缺失。" % (tb if len(tb) < 900 else tb[:900]))
+            try:
+                push_feishu(wh, sec, "WorkBuddy 签到异常告警", msg)
+            except Exception:
+                pass
+        print("[fatal] 未预期异常：%s" % e)
+        return 1
 
 
 if __name__ == "__main__":
