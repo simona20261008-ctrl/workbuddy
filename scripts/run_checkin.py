@@ -24,6 +24,7 @@ WorkBuddy 每日签到 + 派猫猫旅行 · 云端运行脚本（GitHub Actions 
 """
 
 import base64
+import glob
 import hashlib
 import hmac
 import json
@@ -113,6 +114,88 @@ def _deep_mask(obj):
 
 
 # ----------------------------------------------------------------------------
+# TLS 兼容层：部分 Windows 机器的系统根证书库缺 Sectigo/USERTrust 根，
+# 会报 SSL: CERTIFICATE_VERIFY_FAILED / schannel SEC_E_UNTRUSTED_ROOT。
+# 策略：先走系统默认证书链（保留企业自签 CA 场景），仅在证书验证失败时
+#       回退到 Mozilla CA 包重试一次（git/PortableGit 自带，或 certifi）。
+# Linux runner 上通常首次即成功，不会走到回退分支。
+# ----------------------------------------------------------------------------
+_CA_OPENER = None
+
+
+def find_ca_bundle():
+    """定位备用 Mozilla CA 包；找不到返回 None。可用 WB_CA_BUNDLE 显式指定。"""
+    for env in ("WB_CA_BUNDLE", "SSL_CERT_FILE"):
+        p = (os.environ.get(env) or "").strip()
+        if p and os.path.isfile(p):
+            return p
+    try:
+        import certifi  # 可选依赖，不强制
+        p = certifi.where()
+        if p and os.path.isfile(p):
+            return p
+    except Exception:
+        pass
+    home = os.path.expanduser("~")
+    patterns = [
+        os.path.join(home, ".workbuddy", "binaries", "PortableGit", "versions", "*",
+                     "mingw64", "etc", "ssl", "certs", "ca-bundle.crt"),
+        os.path.join(home, ".workbuddy", "binaries", "PortableGit", "versions", "*",
+                     "mingw64", "ssl", "certs", "ca-bundle.crt"),
+        r"C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt",
+        r"C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt",
+        r"C:\Program Files (x86)\Git\mingw64\etc\ssl\certs\ca-bundle.crt",
+        "/etc/ssl/certs/ca-certificates.crt",
+    ]
+    for pat in patterns:
+        for p in sorted(glob.glob(pat)):
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+def _bundle_opener():
+    """用备用 CA 包构建 opener（惰性、缓存）。无可用 CA 包时返回 None。"""
+    global _CA_OPENER
+    if _CA_OPENER is None:
+        cafile = find_ca_bundle()
+        if not cafile:
+            return None
+        try:
+            import ssl
+            ctx = ssl.create_default_context(cafile=cafile)
+            _CA_OPENER = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+        except Exception:
+            return None
+    return _CA_OPENER
+
+
+def _is_cert_error(e):
+    s = ("%s %s" % (type(e).__name__, e)).lower()
+    return any(k in s for k in (
+        "certificate_verify_failed", "certificate verify failed",
+        "unable to get local issuer", "sslcertverificationerror",
+        "self signed certificate", "self-signed certificate",
+        "untrusted root", "sec_e_untrusted_root", "cert_verify",
+    ))
+
+
+def urlopen_smart(req, timeout=HTTP_TIMEOUT):
+    """带证书链回退的 urlopen。HTTPError 原样抛出，由调用方处理状态码。"""
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError:
+        raise
+    except Exception as e:
+        if not _is_cert_error(e):
+            raise
+        op = _bundle_opener()
+        if op is None:
+            raise
+        return op.open(req, timeout=timeout)
+
+
+# ----------------------------------------------------------------------------
 # HTTP 封装（标准库，零依赖）
 # ----------------------------------------------------------------------------
 def api_call(base, path, token, method="POST", payload=None, raw=False):
@@ -131,7 +214,7 @@ def api_call(base, path, token, method="POST", payload=None, raw=False):
     for k, v in headers.items():
         req.add_header(k, v)
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        with urlopen_smart(req, HTTP_TIMEOUT) as resp:
             code = resp.getcode()
             text = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
@@ -164,7 +247,7 @@ def refresh_token(rt):
     req.add_header("X-Domain", "copilot.tencent.com")
     req.add_header("User-Agent", "workbuddy-actions-checkin/%s" % VERSION)
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        with urlopen_smart(req, HTTP_TIMEOUT) as resp:
             return resp.getcode(), json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
@@ -385,7 +468,7 @@ def push_feishu(webhook, secret, title, content):
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
     req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        with urlopen_smart(req, HTTP_TIMEOUT) as resp:
             code = resp.getcode()
             body = json.loads(resp.read().decode("utf-8", "replace"))
         return {"ok": (code == 200 and body.get("code") == 0), "http": code, "resp": _deep_mask(body)}
@@ -476,7 +559,7 @@ def renew_github_secret(new_refresh_token):
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urlopen_smart(req, 15) as resp:
             pk = json.loads(resp.read().decode("utf-8"))
         key, key_id = pk["key"], pk["key_id"]
     except Exception as e:
@@ -497,7 +580,7 @@ def renew_github_secret(new_refresh_token):
         "Content-Type": "application/json",
         "X-GitHub-Api-Version": "2022-11-28"})
     try:
-        with urllib.request.urlopen(req2, timeout=15) as resp:
+        with urlopen_smart(req2, 15) as resp:
             return {"enabled": True, "ok": (resp.getcode() in (201, 204)),
                     "http": resp.getcode(), "detail": "已写回 WB_REFRESH_TOKEN（自续期生效）"}
     except urllib.error.HTTPError as e:

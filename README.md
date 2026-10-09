@@ -40,7 +40,7 @@ refresh_token_local.py  ──▶   Secrets: WB_REFRESH_TOKEN
 | **totorosir-workbuddy-checkin 技能** | `refresh_token_local.py` 复用其中 `rt_auth.py` 读登录态 | 必装（你已装） | 已存在 `~/.workbuddy/skills/totorosir-workbuddy-checkin__skillhub/scripts/rt_auth.py` |
 | **Python 3.8+** | 运行本机导出/注入脚本 | 必装 | 见下方安装 |
 | **Git** | 初始化并推送仓库 | 必装 | 见下方安装 |
-| **GitHub CLI（gh）**（推荐） | 一条命令写入仓库 Secret，免去手动复制 | 强烈推荐 | 见下方安装 |
+| **GitHub CLI（gh）**（可选） | 写入仓库 Secret（若已 `gh auth login`）；**本机未装时脚本自动改走 API 路径**（PyNaCl 加密直写），无需安装 | 可选 | 见下方安装 |
 | **GitHub 账号** | 存放仓库、承载 Actions | 必装 | 免费注册 github.com |
 | **飞书账号 + 群机器人** | 接收每日推送 | 必装 | 见下方「一次性配置 → 步骤 1」 |
 
@@ -114,8 +114,34 @@ refresh_token_local.py  ──▶   Secrets: WB_REFRESH_TOKEN
 
 ### 2. 注入密钥到仓库 Secret
 
-**方式 A（推荐，一条命令全搞定）** —— 在你的电脑上（WorkBuddy 客户端已登录运行）执行，
-脚本会把 `WB_REFRESH_TOKEN` **以及**飞书两条凭据一次性注入仓库 Secret：
+> 本机已确认**未安装 `gh` CLI**，因此注入走 **GitHub REST API 路径**：脚本先用仓库公钥 + PyNaCl（libsodium）把 Secret 加密再写回，**已内置 TLS 回退**，可规避本机系统根证书库缺 Sectigo/USERTrust 根导致的 `CERTIFICATE_VERIFY_FAILED` / `SEC_E_UNTRUSTED_ROOT`。下方「方式 A」即用此路径。
+
+**方式 A（推荐，一条命令全搞定 · API 路径）** —— 在**你的电脑**上（WorkBuddy 客户端已登录运行）执行：
+
+```powershell
+# 本地 PowerShell 中执行。PAT / 飞书凭据由脚本内提示读取（-i），
+# 用 getpass 不回显，绝不进命令行 / PowerShell 历史 / 日志 / 仓库。
+cd "C:/Users/simona/WorkBuddy/2026-09-29-16-30-33/workbuddy-actions-checkin"
+& "C:/Users/simona/.workbuddy/binaries/python/envs/default/Scripts/python.exe" `
+  scripts/refresh_token_local.py --repo simona20261008-ctrl/workbuddy -i
+```
+
+执行后依次提示三项（回车可跳过飞书两项）：
+```
+GitHub 细粒度 PAT（输入不回显，粘贴后回车）:
+飞书 Webhook（可回车跳过）:
+飞书加签 Secret（可回车跳过，不回显）:
+```
+成功后终端打印：`[info] 已用解释器导出令牌：...`、`[ok] 本机已取到长效令牌（脱敏）：eyJhbG...`、`[注入 WB_REFRESH_TOKEN] 成功 → ...`。
+
+- 脚本复用已安装的 `totorosir-workbuddy-checkin` 技能导出长效令牌，自动处理 5.6.2+ 加密登录态（已实测本机可导出）。
+- **不要**把 PAT/飞书写进命令行或 `-Prompt` 文本里（会留痕到历史），一律等脚本提示时再输入。
+- 明文令牌只经 HTTPS 直传，**不写文件、不进日志**；终端只打印脱敏串。
+- 也可预置环境变量 `WB_INJECT_GH_TOKEN`，或用 `--gh-token "github_pat_xxx"`（仅临时可信终端）。
+- 飞书两条凭据**用方式 A 已自动写入**，无需再到 UI 手动加；只有下面的情况才走方式 B。
+- ⚠️ 若报 `本地导出长效令牌失败（returncode=9009）`：说明 `python3` 命中了 Windows 商店空壳别名。已在脚本内修复（优先用当前 `sys.executable`，自动跳过空壳），**请用上面这条带绝对路径 venv python 的命令**运行即可。
+
+**方式 A2（gh CLI，仅当本机已 `gh auth login`）** ：
 
 ```bash
 python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
@@ -123,11 +149,7 @@ python3 scripts/refresh_token_local.py --repo <你的owner>/<仓库名> \
     --feishu-secret "你的加签密钥（没开签名校验可省略此参数）"
 ```
 
-- 脚本复用已安装的 `totorosir-workbuddy-checkin` 技能导出长效令牌，自动处理 5.6.2+ 加密登录态。
-- 明文令牌只经 `gh secret set -b` / HTTPS 直传，**不写文件、不进日志**；终端只打印脱敏串。
-- 飞书两条凭据**用方式 A 已自动写入**，无需再到 UI 手动加；只有下面的情况才走方式 B。
-
-**方式 B（手动在 GitHub UI 加，截图级）** —— 适用于：没装 `gh`/`GH_TOKEN`、或只想单独补某条 Secret。
+**方式 B（手动在 GitHub UI 加，截图级）** —— 适用于：没有 PAT、或只想单独补某条 Secret。
 
 1. 打开仓库首页 → 点顶部导航栏的 **Settings**（仓库级 Settings，不是个人头像里的 Settings）。
 2. 左侧边栏最底部点 **Secrets and variables** → 展开后点 **Actions**。
