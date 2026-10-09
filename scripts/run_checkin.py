@@ -482,7 +482,7 @@ def push_feishu(webhook, secret, title, content):
         return {"ok": False, "detail": str(e)[:200]}
 
 
-def build_feishu_content(checkin, travel):
+def build_feishu_content(checkin, travel, renew=None):
     today = time.strftime("%Y-%m-%d", time.localtime())
     lines = []
     lines.append("📅 WorkBuddy 每日签到 · %s" % today)
@@ -529,6 +529,24 @@ def build_feishu_content(checkin, travel):
     lines.append("")
     lines.append("【结论】%s（猫猫是否成功不影响本结论）" %
                  ("整体成功 ✅" if ok else "签到失败 ❌"))
+
+    # —— 自续期告警：仅当配置了 WB_GH_PAT 但续期失败时，提醒重生成 token ——
+    # 触发条件：renew.enabled=True（说明 WB_GH_PAT 已配置）且 renew.ok=False（写回失败，
+    # 典型为 token 被删除/过期 → GitHub 返回 401）。此时日常签到不受影响，仅自动续期暂停。
+    if renew and renew.get("enabled") and not renew.get("ok"):
+        lines.append("")
+        lines.append("【⚠️ 自续期失败 · 需你处理】")
+        lines.append("原因：%s" % (renew.get("detail") or "WB_GH_PAT 无效或权限不足"))
+        lines.append("处理步骤：")
+        lines.append("1) GitHub → Settings → Developer settings → Fine-grained tokens，")
+        lines.append("   把失效的 PAT 删除，重新生成一条：")
+        lines.append("   Repository access 选 simona20261008-ctrl/workbuddy；")
+        lines.append("   Permissions 勾 Contents / Workflows / Secrets 全部 Read and write。")
+        lines.append("2) 把新 token 发给 IA，由 IA 更新仓库 WB_GH_PAT Secret；")
+        lines.append("   或你直接在仓库 Settings → Secrets → Actions 改 WB_GH_PAT 的值。")
+        lines.append("注：日常签到不受影响，仅令牌自动续期暂停；")
+        lines.append("在 WB_REFRESH_TOKEN 到期前，自动化仍可正常运行。")
+
     return "\n".join(lines)
 
 
@@ -640,8 +658,8 @@ def run(dry_run=False, location_id=None):
         checkin = do_checkin(at) if not dry_run else _dry_checkin()
         travel = run_travel(at, location_id=location_id) if not dry_run else _dry_travel()
 
-    # 2) 组装飞书内容并推送（猫猫失败不影响结论）
-    content = build_feishu_content(checkin, travel)
+    # 2) 组装飞书内容并推送（猫猫失败不影响结论；自续期失败会附带告警段）
+    content = build_feishu_content(checkin, travel, renew)
     title = "WorkBuddy 每日签到 · %s" % time.strftime("%Y-%m-%d", time.localtime())
     push_result = {}
     if feishu_webhook:
