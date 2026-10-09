@@ -2,8 +2,8 @@ name: WorkBuddy 每日签到 + 派猫猫旅行
 
 on:
   schedule:
-    # 北京时间 09:00 = UTC 01:00（GitHub cron 使用 UTC，且可能延迟数分钟，属正常）
-    - cron: '0 1 * * *'
+    # 北京时间 01:00 = UTC 17:00（前一天；GitHub cron 使用 UTC，且可能延迟数分钟，属正常）
+    - cron: '0 17 * * *'
   workflow_dispatch: {}   # 允许在 GitHub UI / `gh workflow run` 手动触发一次
 
 permissions:
