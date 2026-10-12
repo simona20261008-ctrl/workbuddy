@@ -450,8 +450,9 @@ def _extract_balance(*bodies):
 # 飞书推送（签到 / 猫猫 分两段，结论独立）
 # ----------------------------------------------------------------------------
 def feishu_sign(secret, timestamp):
+    # 飞书官方加签算法：以 "timestamp\nsecret" 整串作为 HMAC-SHA256 的 key，消息为空
     string_to_sign = "%d\n%s" % (timestamp, secret)
-    mac = hmac.new(secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256)
+    mac = hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256)
     return base64.b64encode(mac.digest()).decode("utf-8")
 
 
