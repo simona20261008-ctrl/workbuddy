@@ -665,6 +665,8 @@ def run(dry_run=False, location_id=None):
     if feishu_webhook:
         push_result = push_feishu(feishu_webhook, feishu_secret, title, content)
         print("[info] 飞书推送: %s" % ("成功" if push_result.get("ok") else "失败 %s" % push_result.get("detail", push_result.get("http"))))
+        if not push_result.get("ok") and push_result.get("resp") is not None:
+            print("[info] 飞书响应: %s" % json.dumps(push_result["resp"], ensure_ascii=False)[:300])
     else:
         print("[warn] 未配置 WB_FEISHU_WEBHOOK，跳过飞书推送（仍会输出结果）")
 
