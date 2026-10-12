@@ -1,10 +1,13 @@
 name: WorkBuddy 每日签到 + 派猫猫旅行
 
 on:
+  # 主触发：外部定时服务（cron-job.org / UptimeRobot 等）每日 POST workflow_dispatch API。
+  # GitHub 自带 cron 在免费队列会被延迟/丢弃（实测连续多日 0 触发），不可靠，故改由外部调度。
+  # 备份触发：保留 GitHub 原生 schedule 作为兜底（与 dispatch 双触发，签到/派猫均为幂等，不会重复动作）。
   schedule:
-    # 北京时间 01:00 = UTC 17:00（前一天；GitHub cron 使用 UTC，且可能延迟数分钟，属正常）
+    # 北京时间 01:00 = UTC 17:00（前一天；GitHub cron 使用 UTC，且可能延迟，仅作备份）
     - cron: '0 17 * * *'
-  workflow_dispatch: {}   # 允许在 GitHub UI / `gh workflow run` 手动触发一次
+  workflow_dispatch: {}   # 外部定时服务 / `gh workflow run` / GitHub UI 手动触发
 
 permissions:
   contents: read
@@ -25,7 +28,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install PyNaCl (仅自续期需要)
-        if: ${{ secrets.WB_GH_PAT != '' }}
+        # 注意：if 条件里不能用 secrets 上下文（GitHub 校验会报 Unrecognized named-value），
+        # 改用 job 级 env 已映射好的 WB_GH_PAT（值来自 Secret，语义等价）。
+        if: ${{ env.WB_GH_PAT != '' }}
         run: python3 -m pip install --quiet pynacl
 
       - name: Run check-in + cat travel
