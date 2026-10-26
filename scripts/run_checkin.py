@@ -465,7 +465,8 @@ def push_feishu(webhook, secret, title, content):
         ts = int(time.time())
         sign = feishu_sign(secret, ts)
         sep = "&" if "?" in url else "?"
-        url = "%s%stimestamp=%d&sign=%s" % (url, sep, ts, sign)
+        # 必须对 sign 做 URL 编码：base64 含 + / =，裸拼进 query 会被 URL 解析篡改 → 飞书 19021
+        url = "%s%stimestamp=%d&sign=%s" % (url, sep, ts, urllib.parse.quote(sign, safe=""))
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
     req.add_header("Content-Type", "application/json")
     try:
