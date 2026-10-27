@@ -1,9 +1,9 @@
 name: WorkBuddy 每日签到 + 派猫猫旅行
 
 on:
-  # 主触发：外部定时服务（cron-job.org / UptimeRobot 等）每日 POST workflow_dispatch API。
-  # GitHub 自带 cron 在免费队列会被延迟/丢弃（实测连续多日 0 触发），不可靠，故改由外部调度。
-  # 备份触发：保留 GitHub 原生 schedule 作为兜底（与 dispatch 双触发，签到/派猫均为幂等，不会重复动作）。
+  # 主触发：GitHub 原生 schedule，每日北京时间 08:30（UTC 00:30）云端自动执行，机器无关、关机也能跑。
+  #   实测免费队列每日稳定触发；须在服务端 UTC 日切（北京 08:00）之后，签到才记在北京当天。
+  # 备用触发：workflow_dispatch（cron-job.org / UptimeRobot / gh / GitHub UI 手动），与 schedule 幂等不重复。
   schedule:
     # 北京时间 08:30 = UTC 00:30（服务端按 UTC 自然日切分签到，须落在日切之后，签到才记在正确的北京当天）
     - cron: '30 0 * * *'

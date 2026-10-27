@@ -33,6 +33,7 @@ import random
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 VERSION = "1.0.0"

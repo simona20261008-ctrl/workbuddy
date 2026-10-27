@@ -34,7 +34,8 @@
     Content-Type: application/json
     X-GitHub-Api-Version: 2022-11-28
   Body : {"ref":"main"}
-  Schedule: 每日 01:00 (Asia/Shanghai)  —— cron-job.org 选时区后填 0 1 * * *；用 UTC 则填 0 17 * * *
+  Schedule: 每日 08:30 (Asia/Shanghai) —— cron-job.org 选时区后填 30 8 * * *；用 UTC 则填 30 0 * * *
+            （务必在服务端 UTC 日切/北京 08:00 之后触发，否则签到会记到前一天）
 """
 
 import glob

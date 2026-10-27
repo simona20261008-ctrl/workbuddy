@@ -13,7 +13,7 @@ refresh_token_local.py  ──▶   Secrets: WB_REFRESH_TOKEN
  注入仓库 Secret                Secrets: WB_GH_PAT（可选，用于自续期）
 
                                  │
-                          GitHub Actions (schedule 每日 09:00 北京)
+                          GitHub Actions (schedule 每日 08:30 北京)
                                  │
                           scripts/run_checkin.py
                             1. 用 WB_REFRESH_TOKEN 换接口令牌（插件网关刷新接口）
