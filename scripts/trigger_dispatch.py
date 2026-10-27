@@ -23,7 +23,7 @@
 
 环境变量：
   GH_DISPATCH_TOKEN  具备 Actions: Read and write 的 PAT（必填，非 dry-run 时）
-  GH_DISPATCH_REPO   仓库 owner/name（默认 simona20261008-ctrl/workbuddy）
+  GH_DISPATCH_REPO   仓库 owner/name（也可用 --repo 指定；两者都无则报错）
 
 外部服务（cron-job.org）等价配置：
   URL   : https://api.github.com/repos/simona20261008-ctrl/workbuddy/actions/workflows/daily-checkin.yml/dispatches
@@ -46,7 +46,8 @@ import sys
 import urllib.error
 import urllib.request
 
-DEFAULT_REPO = "simona20261008-ctrl/workbuddy"
+# 不硬编码仓库，模板可迁移：优先 GH_DISPATCH_REPO 环境变量，否则需 --repo 指定
+DEFAULT_REPO = os.environ.get("GH_DISPATCH_REPO", "").strip()
 DEFAULT_REF = "main"
 API_VERSION = "2022-11-28"
 
@@ -105,6 +106,10 @@ def main():
             ref = argv[argv.index("--ref") + 1]
         except (IndexError, ValueError):
             pass
+
+    if not repo:
+        print("[error] 未指定仓库：请用 --repo owner/name 或设置环境变量 GH_DISPATCH_REPO。")
+        return 1
 
     url = "https://api.github.com/repos/%s/actions/workflows/daily-checkin.yml/dispatches" % repo
     token = (os.environ.get("GH_DISPATCH_TOKEN") or "").strip()
