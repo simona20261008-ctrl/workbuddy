@@ -5,8 +5,8 @@ on:
   # GitHub 自带 cron 在免费队列会被延迟/丢弃（实测连续多日 0 触发），不可靠，故改由外部调度。
   # 备份触发：保留 GitHub 原生 schedule 作为兜底（与 dispatch 双触发，签到/派猫均为幂等，不会重复动作）。
   schedule:
-    # 北京时间 01:00 = UTC 17:00（前一天；GitHub cron 使用 UTC，且可能延迟，仅作备份）
-    - cron: '0 17 * * *'
+    # 北京时间 08:30 = UTC 00:30（服务端按 UTC 自然日切分签到，须落在日切之后，签到才记在正确的北京当天）
+    - cron: '30 0 * * *'
   workflow_dispatch: {}   # 外部定时服务 / `gh workflow run` / GitHub UI 手动触发
 
 permissions:
