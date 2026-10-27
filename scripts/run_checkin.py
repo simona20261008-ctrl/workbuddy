@@ -484,8 +484,12 @@ def push_feishu(webhook, secret, title, content):
         return {"ok": False, "detail": str(e)[:200]}
 
 
+def _bj_date():
+    """北京时间(UTC+8)日期，飞书标签对齐用户时区（服务端按 UTC 自然日记账）。"""
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() + 8 * 3600))
+
 def build_feishu_content(checkin, travel, renew=None):
-    today = time.strftime("%Y-%m-%d", time.localtime())
+    today = _bj_date()
     lines = []
     lines.append("📅 WorkBuddy 每日签到 · %s" % today)
     lines.append("")
@@ -662,7 +666,7 @@ def run(dry_run=False, location_id=None):
 
     # 2) 组装飞书内容并推送（猫猫失败不影响结论；自续期失败会附带告警段）
     content = build_feishu_content(checkin, travel, renew)
-    title = "WorkBuddy 每日签到 · %s" % time.strftime("%Y-%m-%d", time.localtime())
+    title = "WorkBuddy 每日签到 · %s" % _bj_date()
     push_result = {}
     if feishu_webhook:
         push_result = push_feishu(feishu_webhook, feishu_secret, title, content)
