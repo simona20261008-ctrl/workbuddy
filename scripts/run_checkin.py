@@ -296,7 +296,6 @@ def do_checkin(token):
             ck_code, ck_body = api_call(BILLING_BASE, CHECKIN_CLAIM_PATH, token)
             raw_log.append(("POST daily-checkin", ck_code, _deep_mask(ck_body)))
             result["detail"]["checkin_http"] = ck_code
-
             if isinstance(ck_body, dict):
                 code = str(ck_body.get("code", ""))
                 msg = ck_body.get("msg") or ck_body.get("message") or ""
@@ -322,6 +321,21 @@ def do_checkin(token):
                                       + bal)
                     result["detail"]["streak_days"] = streak
                     result["detail"]["raw"] = raw_log
+                    # 领取后复查状态：拿到服务端认定的权威落账日（checkin_dates 首条），
+                    # 用于校验「触发时刻所在自然日」与「实际落账日」是否一致。
+                    # 失败不影响签到结论，仅放弃权威落账日。
+                    try:
+                        vc, vb = api_call(BILLING_BASE, CHECKIN_STATUS_PATH, token)
+                        raw_log.append(("POST checkin-activity-status (post-claim)", vc, _deep_mask(vb)))
+                        node = vb.get("data") if isinstance(vb, dict) and isinstance(vb.get("data"), dict) else vb
+                        if isinstance(node, dict):
+                            dates = node.get("checkin_dates")
+                            if isinstance(dates, list) and dates and isinstance(dates[0], str):
+                                result["detail"]["server_day"] = dates[0]
+                                if node.get("today_checked_in") is True:
+                                    result["detail"]["server_today_checked"] = True
+                    except Exception:
+                        pass
                     return result
                 result.update(status="error", action="failed",
                               msg=msg or ("HTTP %s（业务码 %s）" % (ck_code, code)))
@@ -457,42 +471,101 @@ def feishu_sign(secret, timestamp):
     return base64.b64encode(mac.digest()).decode("utf-8")
 
 
-def push_feishu(webhook, secret, title, content):
+def push_feishu(webhook, secret, title, content, retries=3, retry_wait=8):
+    """推送飞书机器人消息。
+
+    对「频率限制」(code 11232) 做指数退避重试 —— 同一机器人短时间内被多次触发
+    (例如手动 dispatch 与定时任务撞车) 会被飞书限流，此属可恢复的临时错误，
+    不应把整个 run 判成失败。签名错误 (19021) 与鉴权错误则不重试，直接暴露。
+    """
     if not webhook:
         return {"ok": False, "detail": "飞书 webhook 未配置（WB_FEISHU_WEBHOOK）"}
     payload = {"msg_type": "text", "content": {"text": "%s\n%s" % (title, content)}}
-    url = webhook
-    if secret:
-        ts = int(time.time())
-        sign = feishu_sign(secret, ts)
-        sep = "&" if "?" in url else "?"
-        # 必须对 sign 做 URL 编码：base64 含 + / =，裸拼进 query 会被 URL 解析篡改 → 飞书 19021
-        url = "%s%stimestamp=%d&sign=%s" % (url, sep, ts, urllib.parse.quote(sign, safe=""))
-    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
-    req.add_header("Content-Type", "application/json")
-    try:
-        with urlopen_smart(req, HTTP_TIMEOUT) as resp:
-            code = resp.getcode()
-            body = json.loads(resp.read().decode("utf-8", "replace"))
-        return {"ok": (code == 200 and body.get("code") == 0), "http": code, "resp": _deep_mask(body)}
-    except urllib.error.HTTPError as e:
+
+    result = {"ok": False}
+    for attempt in range(1, retries + 1):
+        url = webhook
+        if secret:
+            ts = int(time.time())
+            sign = feishu_sign(secret, ts)
+            sep = "&" if "?" in url else "?"
+            # 必须对 sign 做 URL 编码：base64 含 + / =，裸拼进 query 会被 URL 解析篡改 → 飞书 19021
+            url = "%s%stimestamp=%d&sign=%s" % (url, sep, ts, urllib.parse.quote(sign, safe=""))
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
+        req.add_header("Content-Type", "application/json")
         try:
-            body = json.loads(e.read().decode("utf-8", "replace"))
-        except Exception:
-            body = {}
-        return {"ok": False, "http": e.code, "resp": _deep_mask(body)}
-    except Exception as e:
-        return {"ok": False, "detail": str(e)[:200]}
+            with urlopen_smart(req, HTTP_TIMEOUT) as resp:
+                code = resp.getcode()
+                body = json.loads(resp.read().decode("utf-8", "replace"))
+            ok = (code == 200 and body.get("code") == 0)
+            result = {"ok": ok, "http": code, "resp": _deep_mask(body),
+                      "code": body.get("code"), "msg": body.get("msg")}
+            if ok:
+                return result
+        except urllib.error.HTTPError as e:
+            try:
+                body = json.loads(e.read().decode("utf-8", "replace"))
+            except Exception:
+                body = {}
+            result = {"ok": False, "http": e.code, "resp": _deep_mask(body),
+                      "code": body.get("code"), "msg": body.get("msg")}
+        except Exception as e:
+            result = {"ok": False, "detail": str(e)[:200]}
+
+        biz_code = result.get("code")
+        # 仅对频率限制(11232)与服务端繁忙(11230/99991400)重试；签名/鉴权错误重试无意义
+        retryable = biz_code in (11232, 11230, 99991400, 11200)
+        if attempt < retries and retryable:
+            wait = retry_wait * attempt
+            print("[warn] 飞书推送被限流/繁忙 (code=%s)，%ds 后重试 (%d/%d)"
+                  % (biz_code, wait, attempt, retries))
+            time.sleep(wait)
+            continue
+        break
+    return result
 
 
 def _bj_date():
-    """北京时间(UTC+8)日期，飞书标签对齐用户时区（服务端按 UTC 自然日记账）。"""
+    """北京时间(UTC+8)日期，飞书标签对齐用户时区（服务端按北京自然日记账）。"""
     return time.strftime("%Y-%m-%d", time.gmtime(time.time() + 8 * 3600))
 
+
+def _server_day(checkin):
+    """服务端实际认定的签到日（权威落账日，用于自检与告警）。
+
+    取 checkin-activity-status 返回的 checkin_dates 首条 —— 这是服务端自己认定的
+    「最近一个已签到日」。领取成功后脚本会再查一次状态（见 do_checkin 的复查逻辑），
+    因此这里拿到的是本次落账后的真实日期，可用于校验「触发时刻所在自然日」
+    与「实际落账日」是否一致；不一致时在飞书消息里显式告警。
+    """
+    raw = (checkin or {}).get("detail", {}).get("raw") or []
+    # 倒序扫描：领取成功后的复查结果排在最后，优先采用
+    for entry in reversed(raw):
+        try:
+            label, body = entry[0], entry[2]
+        except Exception:
+            continue
+        if "status" not in str(label):
+            continue
+        if not isinstance(body, dict):
+            continue
+        node = body.get("data") if isinstance(body.get("data"), dict) else body
+        dates = node.get("checkin_dates") if isinstance(node, dict) else None
+        if isinstance(dates, list) and dates and isinstance(dates[0], str):
+            return dates[0]
+    return None
+
 def build_feishu_content(checkin, travel, renew=None):
-    today = _bj_date()
+    bj_today = _bj_date()
+    server_day = _server_day(checkin)
     lines = []
-    lines.append("📅 WorkBuddy 每日签到 · %s" % today)
+    # 标题用「触发时刻的北京自然日」——这是用户视角的今天。
+    # 服务端按北京自然日切账，正常情况下 server_day == bj_today。
+    # 若不一致（如服务端口径变更），如实标注而不是悄悄换日期，避免日期错位。
+    lines.append("📅 WorkBuddy 每日签到 · %s" % bj_today)
+    if server_day and server_day != bj_today:
+        lines.append("（⚠️ 服务端认定的落账日为 %s，与北京自然日 %s 不一致，请核查服务端日切口径）"
+                     % (server_day, bj_today))
     lines.append("")
 
     # —— 签到段 ——
@@ -671,7 +744,9 @@ def run(dry_run=False, location_id=None):
     push_result = {}
     if feishu_webhook:
         push_result = push_feishu(feishu_webhook, feishu_secret, title, content)
-        print("[info] 飞书推送: %s" % ("成功" if push_result.get("ok") else "失败 %s" % push_result.get("detail", push_result.get("http"))))
+        print("[info] 飞书推送: %s" % ("成功" if push_result.get("ok") else "失败 %s" % (
+            push_result.get("detail") or ("http=%s code=%s msg=%s" % (
+                push_result.get("http"), push_result.get("code"), push_result.get("msg"))))))
         if not push_result.get("ok") and push_result.get("resp") is not None:
             print("[info] 飞书响应: %s" % json.dumps(push_result["resp"], ensure_ascii=False)[:300])
     else:
@@ -684,6 +759,12 @@ def run(dry_run=False, location_id=None):
         "travel": {k: v for k, v in travel.items() if k not in ("final_state", "raw")},
         "feishu": {"configured": bool(feishu_webhook),
                    "ok": push_result.get("ok") if feishu_webhook else None},
+        # 落账日自检：触发时刻的北京自然日 vs 服务端认定的落账日
+        "date_audit": {
+            "trigger_bj_date": _bj_date(),
+            "server_day": checkin.get("detail", {}).get("server_day"),
+            "server_today_checked": checkin.get("detail", {}).get("server_today_checked"),
+        },
         # 验收用：脱敏原始返回
         "raw_responses": {
             "refresh": _deep_mask(refresh_body),
@@ -698,15 +779,20 @@ def run(dry_run=False, location_id=None):
     print("=" * 60)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
-    # 结论：签到成功即整体成功（猫猫失败不影响退出码）
+    # 结论：核心业务（签到）成功即整体成功。
+    #
+    # 退出码语义（2026-10-28 修正）：
+    #   旧逻辑把「飞书推送失败」也算作 run 失败 → 当机器人被限流(11232)时，
+    #   一个实际已签到成功的 run 被误标成 failure，掩盖真实签到状态。
+    #   现改为：签到失败 → exit 1（真问题，必须暴露）；
+    #           签到成功但通知失败 → exit 0，并在日志与消息体中显著告警。
     checkin_ok = checkin.get("status") == "ok"
-    # 通知兜底：若配置了飞书但推送失败，让 GitHub Actions 判定为失败，
-    # 触发 GitHub 自带的失败通知（邮件 / Web 通知），避免“签到成功但通知没送达”的静默丢失。
-    if feishu_webhook:
-        notify_ok = bool(push_result.get("ok"))
-    else:
-        notify_ok = True  # 未配置飞书：视为无需通知，不因此判定失败
-    exit_code = 0 if (checkin_ok and notify_ok) else 1
+    if feishu_webhook and not push_result.get("ok"):
+        biz = push_result.get("code")
+        print("[warn] 核心签到成功，但飞书通知未送达 (http=%s code=%s msg=%s) —— "
+              "不据此判定 run 失败，避免限流掩盖真实签到状态"
+              % (push_result.get("http"), biz, push_result.get("msg") or push_result.get("detail")))
+    exit_code = 0 if checkin_ok else 1
     return exit_code, result
 
 

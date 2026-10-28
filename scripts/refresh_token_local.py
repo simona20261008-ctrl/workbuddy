@@ -433,7 +433,7 @@ def main():
         ok3, d3 = inject_secret(repo, "WB_FEISHU_SECRET", feishu_secret, gh_token=gh_token)
         print("[注入 WB_FEISHU_SECRET] %s" % ("成功" if ok3 else "需手动: " + d3.splitlines()[0]))
 
-    print("[完成] 仓库 %s 的 Secrets 配置好后，GitHub Actions 将每日自动执行（UTC 00:30 = 北京 08:30）。" % repo)
+    print("[完成] 仓库 %s 的 Secrets 配置好后，GitHub Actions 将每日自动执行（北京时间 01:00，UTC 17:00）。" % repo)
     return 0
 
 
